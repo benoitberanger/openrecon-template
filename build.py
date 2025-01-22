@@ -279,8 +279,7 @@ def main(args: argparse.Namespace):
         json_content = json.load(fid)
 
     # prep info
-    defaultConfig                         = target_data['name']['process']
-    cmdline  = f'CMD [ "python3", "/opt/code/python-ismrmrd-server/main.py", "-v", "-H=0.0.0.0", "-p=9002", "-l=/tmp/python-ismrmrd-server.log", "--defaultConfig={defaultConfig}"]'
+    cmdline  = f'CMD [ "python3", "/opt/code/python-ismrmrd-server/main.py", "-v", "-H=0.0.0.0", "-p=9002", "-l=/tmp/python-ismrmrd-server.log", "--defaultConfig={target_data['name']['process']}"]'
     version                         = json_content['general']['version']
     vendor                          = json_content['general']['vendor' ]
     name                            = json_content['general']['id'     ]

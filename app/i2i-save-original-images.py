@@ -11,9 +11,6 @@ import constants
 from time import perf_counter
 
 
-# Folder for debug output files
-debugFolder = "/tmp/share/debug"
-
 def process(connection, config, metadata):
     logging.info("Config: \n%s", config)
 
@@ -98,44 +95,74 @@ def process(connection, config, metadata):
         except:
             logging.error("Failed to send close message!")
 
+
+def compute_nifti_affine(image_header, voxel_size):
+
+    # Extract necessary fields
+    position      = image_header.position
+    read_dir      = image_header.read_dir
+    phase_dir     = image_header.phase_dir
+    slice_dir     = image_header.slice_dir
+
+    # Convert from LPS to RAS
+    position_ras  = [ -position[0],  -position[1],  position[2]]
+    read_dir_ras  = [ -read_dir[0],  -read_dir[1],  read_dir[2]]
+    phase_dir_ras = [-phase_dir[0], -phase_dir[1], phase_dir[2]]
+    slice_dir_ras = [-slice_dir[0], -slice_dir[1], slice_dir[2]]
+
+    # Construct rotation-scaling matrix
+    rotation_scaling_matrix = np.column_stack([
+        voxel_size[0] * np.array( read_dir_ras),
+        voxel_size[1] * np.array(phase_dir_ras),
+        voxel_size[2] * np.array(slice_dir_ras)
+    ])
+
+    # Construct affine matrix
+    affine = np.eye(4)
+    affine[:3, :3] = rotation_scaling_matrix
+    affine[:3,  3] = position_ras
+
+    return affine
+
+
 def process_image(images, connection, config, metadata):
     
     if len(images) == 0:
         return []
 
-    # Create folder, if necessary
-    if not os.path.exists(debugFolder):
-        os.makedirs(debugFolder)
-        logging.debug("Created folder " + debugFolder + " for debug output files")
-
     logging.debug("Processing data with %d images of type %s", len(images), ismrmrd.get_dtype_from_data_type(images[0].data_type))
 
-    param_saveoriginalimages = False
+    # OR paramter : Save Original Images
+    saveoriginalimages = True
     if ('parameters' in config) and ('SaveOriginalImages' in config['parameters']):
         logging.debug(f"type of config['parameters']['SaveOriginalImages'] is {type(config['parameters']['SaveOriginalImages'])}")
 
         if type(config['parameters']['SaveOriginalImages']) is str:
             if   config['parameters']['SaveOriginalImages'].lower() == 'true' :
-                param_saveoriginalimages = True
+                saveoriginalimages = True
             elif config['parameters']['SaveOriginalImages'].lower() == 'false':
-                param_saveoriginalimages = False
+                saveoriginalimages = False
 
         elif type(config['parameters']['SaveOriginalImages']) is bool:
-            param_saveoriginalimages = config['parameters']['SaveOriginalImages']
+            saveoriginalimages = config['parameters']['SaveOriginalImages']
         
     else:
         logging.warning("config['parameters']['SaveOriginalImages'] NOT FOUND !!")
-    logging.debug(f'param_saveoriginalimages = {param_saveoriginalimages}')
+    logging.info(f'saveoriginalimages = {saveoriginalimages}')
 
-    if param_saveoriginalimages:
+    if saveoriginalimages:
         images_ORIG = images.copy()
 
     # Note: The MRD Image class stores data as [cha z y x]
 
     # Extract image data into a 5D array of size [img cha z y x]
     data = np.stack([img.data                              for img in images])
+    logging.info(f'MRD supposed organization : [img cha z y x]')
+    logging.info(f'MRD data shape : {data.shape}')
     head = [img.getHead()                                  for img in images]
     meta = [ismrmrd.Meta.deserialize(img.attribute_string) for img in images]
+
+    logging.warning(f'MRD SequenceDescription : {meta[0]['SequenceDescription']}')
 
     # Reformat data to [y x z cha img], i.e. [row col] for the first two dimensions
     data = data.transpose((3, 4, 2, 1, 0))
@@ -147,8 +174,19 @@ def process_image(images, connection, config, metadata):
     if 'IceMiniHead' in meta[0]:
         logging.debug("IceMiniHead[0]: %s", base64.b64decode(meta[0]['IceMiniHead']).decode('utf-8'))
 
-    logging.debug("Original image data is size %s" % (data.shape,))
-    np.save(debugFolder + "/" + "imgOrig.npy", data)
+    # Diagnostic info
+    matrix    = np.array(head[0].matrix_size  [:])
+    fov       = np.array(head[0].field_of_view[:])
+    voxelsize = fov/matrix
+    read_dir  = np.array(images[0].read_dir )
+    phase_dir = np.array(images[0].phase_dir)
+    slice_dir = np.array(images[0].slice_dir)
+    logging.info(f'MRD computed maxtrix [x y z] : {matrix   }')
+    logging.info(f'MRD computed fov     [x y z] : {fov      }')
+    logging.info(f'MRD computed voxel   [x y z] : {voxelsize}')
+    logging.info(f'MRD read_dir         [x y z] : {read_dir }')
+    logging.info(f'MRD phase_dir        [x y z] : {phase_dir}')
+    logging.info(f'MRD slice_dir        [x y z] : {slice_dir}')
 
     # Determine max value (12 or 16 bit)
     BitsStored = 12
@@ -165,7 +203,6 @@ def process_image(images, connection, config, metadata):
     # Invert image contrast
     data = maxVal-data
     data = np.abs(data)
-    np.save(debugFolder + "/" + "imgInverted.npy", data)
 
     currentSeries = 0
 
@@ -192,9 +229,9 @@ def process_image(images, connection, config, metadata):
             if mrdhelper.extract_minihead_bool_param(base64.b64decode(meta[iImg]['IceMiniHead']).decode('utf-8'), 'BIsSeriesEnd') is True:
                 currentSeries += 1
 
-        if param_saveoriginalimages:
+        if saveoriginalimages:
             oldHeader.image_series_index += 1
-        logging.debug(f'param_saveoriginalimages = {param_saveoriginalimages    }')
+        logging.debug(f'saveoriginalimages = {saveoriginalimages    }')
         logging.debug(f'image_series_index       = {oldHeader.image_series_index}')
         logging.debug(f'image_index              = {oldHeader.image_index       }')
         logging.debug(f'slice                    = {oldHeader.slice             }')
@@ -223,7 +260,7 @@ def process_image(images, connection, config, metadata):
 
         imagesOut[iImg].attribute_string = metaXml
 
-    if param_saveoriginalimages:
+    if saveoriginalimages:
         return images_ORIG + imagesOut
     else:
         return               imagesOut
