@@ -125,6 +125,65 @@ def compute_nifti_affine(image_header, voxel_size):
     return affine
 
 
+def get3Darray(data) -> np.array:
+
+    # Reformat data to [y x z cha img], i.e. [row col] for the first two dimensions
+    data = data.transpose((3, 4, 2, 1, 0))
+
+    data_5d = data.astype(np.float64)
+
+    # Reformat data from [y x z cha img] to [y x img]
+    data_3d = data_5d[:,:,0,0,:]
+    
+    return data_3d
+
+
+def createMRDImage(data_in, head, meta, metadata, info):
+
+    # Reformat data from [y x img] to [y x z cha img]
+    data = data_in[:,:,np.newaxis,np.newaxis,:].astype(np.int16)
+
+    # Re-slice back into 2D images
+    imagesOut = [None] * data.shape[-1]
+    for iImg in range(data.shape[-1]):
+
+        # Create new MRD instance for the inverted image
+        # Transpose from convenience shape of [y x z cha] to MRD Image shape of [cha z y x]
+        # from_array() should be called with 'transpose=False' to avoid warnings, and when called
+        # with this option, can take input as: [cha z y x], [z y x], or [y x]
+        imagesOut[iImg] = ismrmrd.Image.from_array(data[...,iImg].transpose((3, 2, 0, 1)), transpose=False)
+
+        # Create a copy of the original fixed header and update the data_type
+        # (we changed it to int16 from all other types)
+        oldHeader = head[iImg]
+        oldHeader.data_type = imagesOut[iImg].data_type
+
+        # Set the image_type to match the data_type for complex data
+        if (imagesOut[iImg].data_type == ismrmrd.DATATYPE_CXFLOAT) or (imagesOut[iImg].data_type == ismrmrd.DATATYPE_CXDOUBLE):
+            oldHeader.image_type = ismrmrd.IMTYPE_COMPLEX
+
+        oldHeader.image_series_index += info['image_series_index_offset']
+
+        imagesOut[iImg].setHead(oldHeader)
+
+        # Create a copy of the original ISMRMRD Meta attributes and update
+        tmpMeta = meta[iImg]
+        tmpMeta['DataRole']                       = 'Image'
+        if len(info['ImageProcessingHistory']) > 0:
+            tmpMeta['ImageProcessingHistory']         = info['ImageProcessingHistory']
+        if len(info['SequenceDescriptionAdditional']) > 0:
+            tmpMeta['SequenceDescriptionAdditional']  = info['SequenceDescriptionAdditional']
+        tmpMeta['Keep_image_geometry']            = 1
+
+        metaXml = tmpMeta.serialize()
+        logging.debug("Image MetaAttributes: %s", xml.dom.minidom.parseString(metaXml).toprettyxml())
+        logging.debug("Image data has %d elements", imagesOut[iImg].data.size)
+
+        imagesOut[iImg].attribute_string = metaXml
+
+    return imagesOut
+
+
 def process_image(images, connection, config, metadata):
     
     if len(images) == 0:
@@ -150,9 +209,6 @@ def process_image(images, connection, config, metadata):
         logging.warning("config['parameters']['SaveOriginalImages'] NOT FOUND !!")
     logging.info(f'saveoriginalimages = {saveoriginalimages}')
 
-    if saveoriginalimages:
-        images_ORIG = images.copy()
-
     # Note: The MRD Image class stores data as [cha z y x]
 
     # Extract image data into a 5D array of size [img cha z y x]
@@ -163,9 +219,6 @@ def process_image(images, connection, config, metadata):
     meta = [ismrmrd.Meta.deserialize(img.attribute_string) for img in images]
 
     logging.warning(f'MRD SequenceDescription : {meta[0]['SequenceDescription']}')
-
-    # Reformat data to [y x z cha img], i.e. [row col] for the first two dimensions
-    data = data.transpose((3, 4, 2, 1, 0))
 
     # Display MetaAttributes for first image
     logging.debug("MetaAttributes[0]: %s", ismrmrd.Meta.serialize(meta[0]))
@@ -188,79 +241,29 @@ def process_image(images, connection, config, metadata):
     logging.info(f'MRD phase_dir        [x y z] : {phase_dir}')
     logging.info(f'MRD slice_dir        [x y z] : {slice_dir}')
 
-    # Determine max value (12 or 16 bit)
-    BitsStored = 12
-    if (mrdhelper.get_userParameterLong_value(metadata, "BitsStored") is not None):
-        BitsStored = mrdhelper.get_userParameterLong_value(metadata, "BitsStored")
-    maxVal = 2**BitsStored - 1
+    # get 3D cube from MRD input data
+    data_ORIG = get3Darray(data)
+    logging.info(f'input data shape : {data_ORIG.shape}')
 
-    # Normalize and convert to int16
-    data = data.astype(np.float64)
-    data *= maxVal/data.max()
-    data = np.around(data)
-    data = data.astype(np.int16)
+    # initialize
+    images_out = []
+    info = {
+        'image_series_index_offset': 0,
+        'ImageProcessingHistory': [],
+        'SequenceDescriptionAdditional': '',
+    }
 
-    # Invert image contrast
-    data = maxVal-data
-    data = np.abs(data)
-
-    currentSeries = 0
-
-    # Re-slice back into 2D images
-    imagesOut = [None] * data.shape[-1]
-    for iImg in range(data.shape[-1]):
-        # Create new MRD instance for the inverted image
-        # Transpose from convenience shape of [y x z cha] to MRD Image shape of [cha z y x]
-        # from_array() should be called with 'transpose=False' to avoid warnings, and when called
-        # with this option, can take input as: [cha z y x], [z y x], or [y x]
-        imagesOut[iImg] = ismrmrd.Image.from_array(data[...,iImg].transpose((3, 2, 0, 1)), transpose=False)
-
-        # Create a copy of the original fixed header and update the data_type
-        # (we changed it to int16 from all other types)
-        oldHeader = head[iImg]
-        oldHeader.data_type = imagesOut[iImg].data_type
-
-        # Set the image_type to match the data_type for complex data
-        if (imagesOut[iImg].data_type == ismrmrd.DATATYPE_CXFLOAT) or (imagesOut[iImg].data_type == ismrmrd.DATATYPE_CXDOUBLE):
-            oldHeader.image_type = ismrmrd.IMTYPE_COMPLEX
-
-        # Increment series number when flag detected (i.e. follow ICE logic for splitting series)
-        if mrdhelper.get_meta_value(meta[iImg], 'IceMiniHead') is not None:
-            if mrdhelper.extract_minihead_bool_param(base64.b64decode(meta[iImg]['IceMiniHead']).decode('utf-8'), 'BIsSeriesEnd') is True:
-                currentSeries += 1
-
-        if saveoriginalimages:
-            oldHeader.image_series_index += 1
-        logging.debug(f'saveoriginalimages = {saveoriginalimages    }')
-        logging.debug(f'image_series_index       = {oldHeader.image_series_index}')
-        logging.debug(f'image_index              = {oldHeader.image_index       }')
-        logging.debug(f'slice                    = {oldHeader.slice             }')
-
-        imagesOut[iImg].setHead(oldHeader)
-
-        # Create a copy of the original ISMRMRD Meta attributes and update
-        tmpMeta = meta[iImg]
-        tmpMeta['DataRole']                       = 'Image'
-        tmpMeta['ImageProcessingHistory']         = ['PYTHON', 'INVERT']
-        tmpMeta['WindowCenter']                   = str((maxVal+1)/2)
-        tmpMeta['WindowWidth']                    = str((maxVal+1))
-        tmpMeta['SequenceDescriptionAdditional']  = 'OPENRECON_invertcontrast'
-        tmpMeta['Keep_image_geometry']            = 1
-
-        # Add image orientation directions to MetaAttributes if not already present
-        if tmpMeta.get('ImageRowDir') is None:
-            tmpMeta['ImageRowDir'] = ["{:.18f}".format(oldHeader.read_dir[0]), "{:.18f}".format(oldHeader.read_dir[1]), "{:.18f}".format(oldHeader.read_dir[2])]
-
-        if tmpMeta.get('ImageColumnDir') is None:
-            tmpMeta['ImageColumnDir'] = ["{:.18f}".format(oldHeader.phase_dir[0]), "{:.18f}".format(oldHeader.phase_dir[1]), "{:.18f}".format(oldHeader.phase_dir[2])]
-
-        metaXml = tmpMeta.serialize()
-        logging.debug("Image MetaAttributes: %s", xml.dom.minidom.parseString(metaXml).toprettyxml())
-        logging.debug("Image data has %d elements", imagesOut[iImg].data.size)
-
-        imagesOut[iImg].attribute_string = metaXml
-
+    # save orig images ?
     if saveoriginalimages:
-        return images_ORIG + imagesOut
-    else:
-        return               imagesOut
+        images_ORIG = createMRDImage(data_ORIG, head, meta, metadata, info)
+        images_out += images_ORIG
+        info['image_series_index_offset'] += 1
+
+    # invert contrast
+    data_inv = np.abs(data_ORIG.max()-data_ORIG)
+    info['ImageProcessingHistory'].append('InvertContrast')
+    info['SequenceDescriptionAdditional'] += 'InvContrast'
+    images_inv = createMRDImage(data_inv, head, meta, metadata, info)
+    images_out += images_inv
+    
+    return images_out
