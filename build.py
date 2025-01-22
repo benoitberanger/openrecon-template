@@ -13,7 +13,6 @@ import pprint
 import sys
 import subprocess
 import re
-import datetime
 import json
 import base64
 
@@ -236,7 +235,7 @@ def main(args: argparse.Namespace):
 
     # target dir
     target_path = os.path.join(cwd, args.dirname)
-    print_section(f'Check "target" dir and its content : {target_path}')
+    print_section(f'Check `target` dir and its content : {target_path}')
     target_data = check_target_dir(target_path)
 
     #############
@@ -261,10 +260,7 @@ def main(args: argparse.Namespace):
             'base'  : '',
         },
         'path': {
-            'process' : target_data['path']['process'].replace(target_path, build_path),
-            'ui_json' : target_data['path']['ui_json'].replace(target_path, build_path),
-            'schema'  : target_data['path']['schema' ].replace(target_path, build_path),
-            'pdf'     : ''
+            'pdf'   : ''
         }
     }
     pprint.pprint(build_data, sort_dicts=False)
@@ -272,17 +268,14 @@ def main(args: argparse.Namespace):
     # copy files in the `build` dir
     to_copy = [
         # [src dst]
-        [target_data['path']['process'], build_data['path']['process']],
-        [target_data['path']['ui_json'], build_data['path']['ui_json']],
-        [target_data['path']['schema' ], build_data['path']['schema' ]],
     ]
     for src_dst in to_copy:
         logger.info(f'copy : SRC={src_dst[0]} DST={src_dst[1]}')
         shutil.copy(src=src_dst[0],dst=src_dst[1])
 
     # load JSON UI
-    logger.info(f"load UI JSON content : {build_data['path']['ui_json']}")
-    with open(build_data['path']['ui_json'], 'r') as fid:
+    logger.info(f"load UI JSON content : {target_data['path']['ui_json']}")
+    with open(target_data['path']['ui_json'], 'r') as fid:
         json_content = json.load(fid)
 
     # prep info
@@ -302,8 +295,8 @@ def main(args: argparse.Namespace):
     pprint.pprint(build_data, sort_dicts=False)
 
     # load JSON Schema, to check if our updated JSON is ok
-    logger.info(f"load JSON Schema : {build_data['path']['schema']}")
-    with open(file=build_data['path']['schema'], mode='r') as fid:
+    logger.info(f"load JSON Schema : {target_data['path']['schema']}")
+    with open(file=target_data['path']['schema'], mode='r') as fid:
         schema_content = json.load(fp=fid)
     validator = jsonschema.Draft7Validator(schema=schema_content)
     errors = list(validator.iter_errors(instance=json_content))
@@ -319,23 +312,23 @@ def main(args: argparse.Namespace):
     
     # write the Dockerfile content
     logger.info(f"Write `build` Dockerfile : {build_data['path']['docker']}")
+    dockerfile_content = [
+        f'# import python-ismrmrd-server as starting point',
+        f'FROM python-ismrmrd-server AS base',
+        f'',
+        f'# mandatory for OpenRecon (see OR documentation)',
+        f'LABEL "com.siemens-healthineers.magneticresonance.openrecon.metadata:1.1.0"="{encoded_json_content}"',
+        f'',
+        f'# new CMD line',
+        f'{cmdline}',
+        f'',
+        f'# copy the .py module',
+        f'COPY {os.path.relpath(target_data['path']['process'], cwd)}  /opt/code/python-ismrmrd-server',
+        f'',
+    ]
+    dockerfile_content = "\n".join(dockerfile_content)
     with open(file=build_data['path']['docker'], mode='w') as fid:
-        fid.writelines([
-            '# import python-ismrmrd-server as starting point \n',
-            f'FROM python-ismrmrd-server \n',
-            '\n'])
-        fid.writelines([
-            '# mandatory for OpenRecon (see OR documentation) \n',
-            f'LABEL "com.siemens-healthineers.magneticresonance.openrecon.metadata:1.1.0"="{encoded_json_content}" \n',
-            '\n'])
-        fid.writelines([
-            '# copy the .py module \n',
-            f"COPY {os.path.relpath(target_data['path']['process'], cwd)}  /opt/code/python-ismrmrd-server \n",
-            '\n'])
-        fid.writelines([
-            '# new CMD line \n',
-            f'{cmdline} \n',
-            '\n'])
+        fid.writelines(dockerfile_content)
         
     # build docker image
     logger.info(f"building docker image `{build_data['name']['docker']}` from Docker file {build_data['path']['docker']}")
@@ -344,7 +337,7 @@ def main(args: argparse.Namespace):
     # save docker image in a .tar
     logger.info(f"(1/2) saving image `{build_data['name']['docker']}` in a .tar {build_data['path']['tar']}")
     subprocess.run(['docker', 'save', '-o', build_data['path']['tar'], build_data['name']['docker']], check=True)
-    logger.info(f'(2/2) saving image DONE')
+    logger.info(f"(2/2) saving image DONE")
 
     # generate PDF
     lines = [
@@ -358,7 +351,7 @@ def main(args: argparse.Namespace):
     # save everything in a ZIP file
     logger.info(f"(1/2) zip all files : {build_data['path']['zip']}")
     subprocess.run(['zip', build_data['name']['base']+'.zip', build_data['name']['base']+'.tar', build_data['name']['base']+'.pdf'], check=True, cwd=build_path)
-    logger.info(f'(1/2) zip all files DONE')
+    logger.info(f"(2/2) zip all files DONE")
 
     # END
     print_section('All done !')
