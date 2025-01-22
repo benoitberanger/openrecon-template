@@ -73,9 +73,9 @@ def check_docker() -> None:
     docker_version = matches[0].split('.')[0] # 20.21.22 -> 20
     maximum_docker_version = 25
     if int(docker_version) >= maximum_docker_version:
-        logger.critical(f'Docker version {docker_version} is too high. Maximum is {maximum_docker_version}')
+        logger.info(f'Docker version {docker_version} is too high. Siemens allows maximum version: {maximum_docker_version}')
         sys.exit(1)
-    logger.info(f'Docker version {docker_version}<{maximum_docker_version} is ok')
+    logger.info(f'Docker version {docker_version}<={maximum_docker_version} is ok')
 
 
 def clone_server(repo_path: str) -> None:
@@ -281,12 +281,13 @@ def main(args: argparse.Namespace):
         shutil.copy(src=src_dst[0],dst=src_dst[1])
 
     # load JSON UI
-    logger.info(f'load UI JSON content : {build_data['path']['ui_json']}')
+    logger.info(f"load UI JSON content : {build_data['path']['ui_json']}")
     with open(build_data['path']['ui_json'], 'r') as fid:
         json_content = json.load(fid)
 
     # prep info
-    cmdline  = f'CMD [ "python3", "/opt/code/python-ismrmrd-server/main.py", "-v", "-H=0.0.0.0", "-p=9002", "-l=/tmp/python-ismrmrd-server.log", "--defaultConfig={target_data['name']['process']}"]'
+    defaultConfig                         = target_data['name']['process']
+    cmdline  = f'CMD [ "python3", "/opt/code/python-ismrmrd-server/main.py", "-v", "-H=0.0.0.0", "-p=9002", "-l=/tmp/python-ismrmrd-server.log", "--defaultConfig={defaultConfig}"]'
     version                         = json_content['general']['version']
     vendor                          = json_content['general']['vendor' ]
     name                            = json_content['general']['id'     ]
@@ -294,14 +295,14 @@ def main(args: argparse.Namespace):
     # other file/path
     build_data['name']['docker'] = f'OpenRecon_{vendor}_{name}:V{version}'.lower()
     build_data['name']['base'  ] = f'OpenRecon_{vendor}_{name}_V{version}'
-    build_data['path']['docker'] = os.path.join(build_path, f'{build_data['name']['base']}.Dockerfile')
-    build_data['path']['tar'   ] = os.path.join(build_path, f'{build_data['name']['base']}.tar')
-    build_data['path']['zip'   ] = os.path.join(build_path, f'{build_data['name']['base']}.zip')
-    build_data['path']['pdf'   ] = os.path.join(build_path, f'{build_data['name']['base']}.pdf')
+    build_data['path']['docker'] = os.path.join(build_path, f"{build_data['name']['base']}.Dockerfile")
+    build_data['path']['tar'   ] = os.path.join(build_path, f"{build_data['name']['base']}.tar")
+    build_data['path']['zip'   ] = os.path.join(build_path, f"{build_data['name']['base']}.zip")
+    build_data['path']['pdf'   ] = os.path.join(build_path, f"{build_data['name']['base']}.pdf")
     pprint.pprint(build_data, sort_dicts=False)
 
     # load JSON Schema, to check if our updated JSON is ok
-    logger.info(f'load JSON Schema : {build_data['path']['schema']}')
+    logger.info(f"load JSON Schema : {build_data['path']['schema']}")
     with open(file=build_data['path']['schema'], mode='r') as fid:
         schema_content = json.load(fp=fid)
     validator = jsonschema.Draft7Validator(schema=schema_content)
@@ -317,7 +318,7 @@ def main(args: argparse.Namespace):
     encoded_json_content = base64.b64encode((json.dumps(obj=json_content,indent=2)).encode('utf-8')).decode('utf-8')
     
     # write the Dockerfile content
-    logger.info(f'Write `build` Dockerfile : {build_data['path']['docker']}')
+    logger.info(f"Write `build` Dockerfile : {build_data['path']['docker']}")
     with open(file=build_data['path']['docker'], mode='w') as fid:
         fid.writelines([
             '# import python-ismrmrd-server as starting point \n',
@@ -329,7 +330,7 @@ def main(args: argparse.Namespace):
             '\n'])
         fid.writelines([
             '# copy the .py module \n',
-            f'COPY {os.path.relpath(target_data['path']['process'], cwd)}  /opt/code/python-ismrmrd-server \n',
+            f"COPY {os.path.relpath(target_data['path']['process'], cwd)}  /opt/code/python-ismrmrd-server \n",
             '\n'])
         fid.writelines([
             '# new CMD line \n',
@@ -337,11 +338,11 @@ def main(args: argparse.Namespace):
             '\n'])
         
     # build docker image
-    logger.info(f'building docker image `{build_data['name']['docker']}` from Docker file {build_data['path']['docker']}')
+    logger.info(f"building docker image `{build_data['name']['docker']}` from Docker file {build_data['path']['docker']}")
     subprocess.run(['docker', 'build', '--tag', build_data['name']['docker'], '--file', build_data['path']['docker'], cwd], check=True)
 
     # save docker image in a .tar
-    logger.info(f'(1/2) saving image `{build_data['name']['docker']}` in a .tar {build_data['path']['tar']}')
+    logger.info(f"(1/2) saving image `{build_data['name']['docker']}` in a .tar {build_data['path']['tar']}")
     subprocess.run(['docker', 'save', '-o', build_data['path']['tar'], build_data['name']['docker']], check=True)
     logger.info(f'(2/2) saving image DONE')
 
@@ -351,11 +352,11 @@ def main(args: argparse.Namespace):
         f'name={name}',
         f'version={version}',
     ]
-    logger.info(f'write PDF file : {build_data['path']['pdf']}')
+    logger.info(f"write PDF file : {build_data['path']['pdf']}")
     create_pdf(file_path=build_data['path']['pdf'], lines_of_text=lines)
 
     # save everything in a ZIP file
-    logger.info(f'(1/2) zip all files : {build_data['path']['zip']}')
+    logger.info(f"(1/2) zip all files : {build_data['path']['zip']}")
     subprocess.run(['zip', build_data['name']['base']+'.zip', build_data['name']['base']+'.tar', build_data['name']['base']+'.pdf'], check=True, cwd=build_path)
     logger.info(f'(1/2) zip all files DONE')
 
