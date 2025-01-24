@@ -86,7 +86,7 @@ def clone_server(repo_path: str) -> None:
         logger.info(f'Found `python-ismrmrd-server` dir, do not clone it again : {repo_path}')
     else:
         logger.info('`python-ismrmrd-server` not found, cloning it...')
-        subprocess.run(['git', 'clone', git_adress], check=True)
+        subprocess.run(f'git clone {git_adress} && cd python-ismrmrd-server && git checkout b3012075b050faac32686f0fafea0c10cde861bd', shell=True, check=True)
 
 
 def build_server(repo_dockerfile_path: str) -> None:
@@ -97,16 +97,6 @@ def build_server(repo_dockerfile_path: str) -> None:
         if 'python-ismrmrd-server' in output:
             logger.info('docker image `python-ismrmrd-server` already built')
             return
-
-        # modification of the python-ismrmrd-server Dockerfile
-        commented_line = 'COPY . /opt/code/python-ismrmrd-server'
-        with open(repo_dockerfile_path, 'r') as fileR:
-            dockerfile_content = fileR.read()
-        if not '#'+commented_line in dockerfile_content:
-            with open(repo_dockerfile_path, 'w') as fileW:
-                modified_dockerfile_content = dockerfile_content.replace(commented_line, '#'+commented_line)
-                logger.info(f'in `python-ismrmrd-server`, commenting the line `{commented_line}`')
-                fileW.write(modified_dockerfile_content)
 
         # build docker image for python-ismrmrd-server
         # this image is the starting point, that will be refined latter
